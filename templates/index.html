@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WeightTrend</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2129; --panel2:#222c37; --line:#2c3845;
+    --text:#e6edf3; --muted:#8b98a5; --accent:#4cc2ff; --trend:#ff8c42;
+    --goal:#9d7bff; --good:#3fb950; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--text);padding:24px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 2px;}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px;}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;}
+  .card .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em;}
+  .card .val{font-size:24px;font-weight:600;margin-top:4px;}
+  .card .val small{font-size:13px;color:var(--muted);font-weight:400;}
+  .chartbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:20px;}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;}
+  button,input,select{font:inherit;}
+  button{background:var(--accent);color:#04222e;border:0;border-radius:8px;padding:9px 16px;font-weight:600;cursor:pointer;}
+  button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line);}
+  input[type=number]{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;width:110px;}
+  select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;}
+  .eta{font-size:15px;line-height:1.6;}
+  .eta b{color:var(--accent);}
+  .pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:20px;padding:3px 10px;font-size:12px;color:var(--muted);margin-left:8px;}
+  a.btn{display:inline-block;text-decoration:none;}
+  .warn{color:var(--bad);}
+  .ok{color:var(--good);}
+  .notice{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;}
+  code{background:var(--panel2);padding:2px 6px;border-radius:5px;font-size:13px;}
+  #status{font-size:13px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WeightTrend</h1>
+  <div class="sub">Withings &rarr; EWMA trend &rarr; goal-date projection</div>
+
+  {% if not configured %}
+  <div class="notice">
+    <p class="warn">⚠ Withings API credentials not set.</p>
+    <p>Set <code>WITHINGS_CLIENT_ID</code> and <code>WITHINGS_CLIENT_SECRET</code>
+       (and <code>WITHINGS_REDIRECT_URI</code>) in your environment, then restart the container.
+       See the README for how to register a Withings developer app.</p>
+  </div>
+  {% elif not connected %}
+  <div class="notice">
+    <p>Not connected to Withings yet.</p>
+    <a class="btn" href="/connect"><button>Connect my Withings account</button></a>
+  </div>
+  {% else %}
+
+  <div class="row">
+    <button id="syncBtn">Sync now</button>
+    <label>Goal
+      <input type="number" id="goalInput" step="0.1" placeholder="goal">
+    </label>
+    <button class="secondary" id="goalBtn">Set goal</button>
+    <select id="unitsSel">
+      <option value="kg">kg</option>
+      <option value="lb">lb</option>
+    </select>
+    <span id="status"></span>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="label">Latest reading</div><div class="val" id="cLatest">–</div></div>
+    <div class="card"><div class="label">Trend (smoothed)</div><div class="val" id="cTrend">–</div></div>
+    <div class="card"><div class="label">Rate / week</div><div class="val" id="cRate">–</div></div>
+    <div class="card"><div class="label">Goal</div><div class="val" id="cGoal">–</div></div>
+  </div>
+
+  <div class="chartbox"><canvas id="chart" height="110"></canvas></div>
+
+  <div class="chartbox eta" id="etaBox">Set a goal to see your projected date.</div>
+
+  {% endif %}
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let chart, units = "kg";
+
+function fmt(v){ return v == null ? "–" : v.toFixed(1); }
+
+async function load(){
+  const r = await fetch('/api/data');
+  const d = await r.json();
+  units = d.units;
+  $('#unitsSel').value = units;
+
+  $('#cLatest').innerHTML = d.latest!=null ? `${fmt(d.latest)} <small>${units}</small>` : '–';
+  $('#cTrend').innerHTML  = d.current_trend!=null ? `${fmt(d.current_trend)} <small>${units}</small>` : '–';
+  $('#cGoal').innerHTML   = d.goal!=null ? `${fmt(d.goal)} <small>${units}</small>` : '–';
+
+  const p = d.projection;
+  if (p && p.rate_per_week!=null){
+    const dir = p.rate_per_week < 0 ? '↓' : '↑';
+    $('#cRate').innerHTML = `${dir} ${Math.abs(p.rate_per_week).toFixed(2)} <small>${units}/wk</small>`;
+  } else $('#cRate').innerHTML = '–';
+
+  renderEta(d);
+  drawChart(d);
+  if (d.goal!=null && !$('#goalInput').value) $('#goalInput').value = d.goal;
+}
+
+function renderEta(d){
+  const box = $('#etaBox'); const p = d.projection;
+  if (d.goal==null){ box.innerHTML = 'Set a goal to see your projected date.'; return; }
+  if (!p){ box.innerHTML = 'Not enough data yet — keep weighing in daily.'; return; }
+  if (!p.moving_toward_goal){
+    box.innerHTML = `<span class="warn">Your trend isn't currently moving toward your goal.</span>
+      Current trend is ${fmt(d.current_trend)} ${units} vs goal ${fmt(d.goal)} ${units}.`;
+    return;
+  }
+  const eta = new Date(p.eta);
+  const opts = {year:'numeric', month:'long', day:'numeric'};
+  let html = `Projected to reach <b>${fmt(d.goal)} ${units}</b> around
+      <b>${eta.toLocaleDateString(undefined,opts)}</b>
+      <span class="pill">${p.days_to_goal} days</span>`;
+  if (p.eta_optimistic || p.eta_pessimistic){
+    const o = p.eta_optimistic ? new Date(p.eta_optimistic).toLocaleDateString(undefined,opts) : '—';
+    const s = p.eta_pessimistic ? new Date(p.eta_pessimistic).toLocaleDateString(undefined,opts) : '—';
+    html += `<div style="color:var(--muted);font-size:13px;margin-top:6px;">
+       Likely range: ${o} – ${s}</div>`;
+  }
+  html += `<div style="color:var(--muted);font-size:12px;margin-top:6px;">
+     Based on the recent trend slope; weight loss usually slows near goal, so treat later dates as more realistic.</div>`;
+  box.innerHTML = html;
+}
+
+function drawChart(d){
+  // Use a shared, sorted set of date labels (category scale) so we avoid
+  // needing a Chart.js date adapter. Daily readings and trend share dates.
+  const labels = d.points.map(p=>p.date);
+  const trendMap = Object.fromEntries(d.trend.map(p=>[p.date, p.value]));
+  const ptVals = d.points.map(p=>p.value);
+  const trendVals = labels.map(l => trendMap[l] ?? null);
+
+  const datasets = [
+    {label:'Daily reading', data:ptVals, showLine:false, pointRadius:2.5,
+     pointBackgroundColor:'rgba(76,194,255,.55)', borderColor:'rgba(76,194,255,.55)'},
+    {label:'EWMA trend', data:trendVals, borderColor:'#ff8c42', borderWidth:2.5,
+     pointRadius:0, tension:.25, spanGaps:true},
+  ];
+  if (d.goal!=null && labels.length){
+    datasets.push({label:'Goal', data:labels.map(()=>d.goal),
+      borderColor:'#9d7bff', borderDash:[6,6], borderWidth:1.5, pointRadius:0});
+  }
+  const cfg = {
+    type:'line',
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      interaction:{mode:'index', intersect:false},
+      scales:{
+        x:{grid:{color:'#2c3845'}, ticks:{color:'#8b98a5', maxTicksLimit:9, autoSkip:true}},
+        y:{grid:{color:'#2c3845'}, ticks:{color:'#8b98a5', callback:v=>v+' '+units}}
+      },
+      plugins:{legend:{labels:{color:'#e6edf3'}}}
+    }
+  };
+  if (chart) chart.destroy();
+  chart = new Chart($('#chart'), cfg);
+}
+
+const setStatus = (t,cls='') => { const s=$('#status'); s.textContent=t; s.className=cls; };
+
+if (document.getElementById('syncBtn')){
+  $('#syncBtn').onclick = async ()=>{
+    setStatus('Syncing…');
+    const r = await fetch('/sync',{method:'POST'});
+    const j = await r.json();
+    if (j.ok){ setStatus(`Added ${j.added} new reading(s)`,'ok'); load(); }
+    else setStatus('Sync failed: '+j.error,'warn');
+  };
+  $('#goalBtn').onclick = async ()=>{
+    const v = parseFloat($('#goalInput').value);
+    if (isNaN(v)) return;
+    await fetch('/api/goal',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({goal:v})});
+    setStatus('Goal saved','ok'); load();
+  };
+  $('#unitsSel').onchange = async (e)=>{
+    await fetch('/api/units',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({units:e.target.value})});
+    $('#goalInput').value=''; load();
+  };
+  load();
+}
+</script>
+</body>
+</html>

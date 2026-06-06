@@ -1,0 +1,19 @@
+services:
+  weighttrend:
+    build: .
+    # Or, once you've pushed an image:  image: yourname/weighttrend:latest
+    container_name: weighttrend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"            # host:container  — change the left side if 8080 is taken
+    environment:
+      WITHINGS_CLIENT_ID: "${WITHINGS_CLIENT_ID}"
+      WITHINGS_CLIENT_SECRET: "${WITHINGS_CLIENT_SECRET}"
+      # MUST exactly match the callback URL registered in the Withings dashboard.
+      WITHINGS_REDIRECT_URI: "${WITHINGS_REDIRECT_URI:-http://localhost:8080/callback}"
+      SECRET_KEY: "${SECRET_KEY:-change-me-please}"
+      UNITS: "${UNITS:-kg}"
+      EWMA_ALPHA: "${EWMA_ALPHA:-0.1}"
+      PROJECTION_WINDOW_DAYS: "${PROJECTION_WINDOW_DAYS:-30}"
+    volumes:
+      - ./data:/data          # SQLite DB persists here (on Unraid: /mnt/user/appdata/weighttrend)
